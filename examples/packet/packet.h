@@ -1,23 +1,8 @@
 /*
  *
- *  BlueZ - Bluetooth protocol stack for Linux
+ *  Packet - Flow control protocl for bluetooth
+ * Copyright (c) 2022, Wenxuan Wu <wenxuan.wu@xjsd.com>
  *
- *  Copyright (C) 2011  Nokia Corporation
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
@@ -30,9 +15,11 @@ struct IQUEUEHEAD {
 
 typedef struct IQUEUEHEAD iqueue_head;
 
-//---------------------------------------------------------------------
-// queue init                                                         
-//---------------------------------------------------------------------
+/**
+ *
+ * @name Queue init                                                         
+ *
+ */
 #define IQUEUE_HEAD_INIT(name) { &(name), &(name) }
 #define IQUEUE_HEAD(name) \
 	struct IQUEUEHEAD name = IQUEUE_HEAD_INIT(name)
@@ -66,6 +53,14 @@ typedef struct IQUEUEHEAD iqueue_head;
 
 #define IQUEUE_IS_EMPTY(entry) ((entry) == (entry)->next)
 
+
+/**
+ * @name queue operations 
+ *
+ *
+ */
+
+//@{
 #define iqueue_init		IQUEUE_INIT
 #define iqueue_entry	IQUEUE_ENTRY
 #define iqueue_add		IQUEUE_ADD
@@ -85,7 +80,6 @@ typedef struct IQUEUEHEAD iqueue_head;
 #define iqueue_foreach_entry(pos, head) \
 	for( (pos) = (head)->next; (pos) != (head) ; (pos) = (pos)->next )
 	
-
 #define __iqueue_splice(list, head) do {	\
 		iqueue_head *first = (list)->next, *last = (list)->prev; \
 		iqueue_head *at = (head)->next; \
@@ -97,6 +91,7 @@ typedef struct IQUEUEHEAD iqueue_head;
 
 #define iqueue_splice_init(list, head) do {	\
 	iqueue_splice(list, head);	iqueue_init(list); } while (0)
+//@}
 
 #endif
 
@@ -104,8 +99,14 @@ typedef struct IQUEUEHEAD iqueue_head;
 #define FSM_H
 #include <readline/readline.h>
 #include <gattlib.h>
-#define HEADERLEN	4
+#include <stdbool.h>
 
+/**
+ * @brief bluetooth flow control protocl event filter
+ *  @note events filter.
+ */
+//@{
+#define PKT_HEADERLEN	4
 #define BL_SEND_CTR 1
 #define BL_SEND_MNG 2
 #define BL_SEND_SINGLE_CTR 3
@@ -115,6 +116,7 @@ typedef struct IQUEUEHEAD iqueue_head;
 #define BL_RECV_CTR 7
 #define BL_RECV_SINGLE_CTR 8
 #define BL_RECV_DATA 9
+//@}
 
 typedef unsigned int u32;
 typedef unsigned short u16;
@@ -130,62 +132,109 @@ typedef char i8;
  * +--------+--------+--------+--------+ SN：Sequence Number, 0: Flow 非0: Data 
  * |       SN        | type   |   cmd  | type: CMD, ACK, Single CMD, Single ACK
  * +--------+--------+--------+--------+ cmd: Command, 指令类型，代表这个Packet的类型
- * |		len                        | len: Length, 后续数据的长度
+ * |		MSS                        | MSS: Length, 数据(without pkt_header)长度
  * +--------+--------+--------+--------+
+ * @brief protocol types
 **/
+//@{
+#define BL_PACKET_CTRL_FLAG 0
+#define BL_PCCKET_DATA_FLAG 1
 
-enum type {
-    CTR,
-    ACK,
-    DATA,
-    SINGLE_ACK,
-    SINGLE,
-    INVALD
-} packet_type;
 
-struct pkt_seg{
+#define BL_PACKET_OPTCODE_ACK 1
+#define BL_PACKET_OPTCODE_DATA 2
+#define BL_PACKET_TYPE_SINGLE_ACK 3
+#define BL_PACKET_TYPE_SINGLE 4
+#define BL_PACKET_TYPE_INVALID 5
+
+//@{
+#define PKT_CMD_DATA 0 
+#define PKT_CMD_UNBOND 1
+//@}
+#ifdef __cplusplus
+extern "C" {
+#endif
+struct pkt_seg {
     struct IQUEUEHEAD node;
     u16 sn;
-    u8 type;
-    u8 value;
-    u8 data[1];
-}
-struct pkt_pcb
-{
-    gatt_connection_t* connection;
-    struct IQUEUEHEAD snd_queue;
-    struct IQUEUEHEAD rcv_queue;
-    u32 send_timstamp;
-    char *buffer;
-#define MAX_TIMEOUT 6
-    u32 mtu;
-    u8 seg_size;
-}
-
-/**
- * 
- * Finite state machine
- *
- * */
-typedef struct fsm{
-    struct pkt_pcb *pcb;
-    const struct fsm_callbacks *callbacks;
-    const char *term_reason;
-    u8 term_reason_len;
-    u8 seen_ack;
-    u8 state;
+    union frm {
+        struct ctrl_frm {
+            u8 optcode;
+            u8 cmd;
+        } ctrl;
+        struct data_frm {
+            u8 data[];
+        } data;
+    };
 };
 
-typedef struct fsm_callbacks{
-    void (*reset_state)(struct fsm*);
-    int (*send_ctr)(struct fsm*);
-    int (*send_mng)(struct fsm*);
-    int (*recv_ack)(struct fsm*);   
-    int (*up)(struct fsm *);
-    int (*down)(struct fsm *);
-    int (*exit)(struct fsm*, int, int, u8 *, int);
-}
-enum bl_event
+
+/**
+ * @name blue tooth connection control block.
+ * 
+ */
+struct pkt_cb
+{
+    struct IQUEUEHEAD snd_queue;    /**< Writer's packet queue to send */
+    struct IQUEUEHEAD rcv_queue;    /**< Receiver's packet queue to receive */
+    struct IQUEUEHEAD sync_queue;   /**< Sync queue to sync lost packets */
+    u32 max_frame_count;                /**< Number of frames based on mtu */
+    char *buffer;
+    u32 dmtu;
+    u32 timeout;
+    int logmask;
+    int max_nak_loops;
+    int nsnd_queue;
+    int nrcv_queue;
+    int nsyn_queue;
+    void (*output)(const char *buf, int len, struct pkt_seg *seg);
+    void (*log)(const char *log, struct pkt_cb* pcb);
+};
+
+#define PKT_LOG_OUTPUT 1
+#define PKT_LOG_INPUT  2
+#define PKT_LOG_SEND   4
+#define PKT_LOG_RECV   8
+#define PKT_LOG_IN_SYNC 16
+#define PKT_LOG_IN_DATA 32
+#define PKT_LOG_IN_ACK  64
+#define PKT_LOG_IN_PROBE 128
+#define PKT_LOG_OUT_DATA 256
+#define PKT_LOG_OUT_ACK   512
+#define PKT_LOG_OUT_PROBE 1024
+#define PKT_LOG_OUT_SYNC  2048
+
+
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define htobs(d)  (d)
+#define htobl(d)  (d)
+#define btohs(d)  (d)
+#define btohl(d)  (d)
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#define htobs(d)  bswap_16(d)
+#define htobl(d)  bswap_32(d)
+#define btohs(d)  bswap_16(d)
+#define btohl(d)  bswap_32(d)
+#else
+#error "Unknown byte order"
+#endif
+
+
+
+/**
+ * @brief maxium params related
+ */
+//@{
+#define MAX_TIMEOUT 6000
+#define MAX_SEG_MTU 20
+#define MAX_NAKLOOPS 6
+#define MAX_ATT_PAYLOAD 244
+//@}
+/**
+ * @brief flow control events.
+ * 
+ */
+enum bl_fsm_event
 {
     SEND_CTR,
     SEND_MNG,
@@ -195,26 +244,31 @@ enum bl_event
     RECV_CTR,
     RECV_SINGLE_CTR,
     RECV_DATA,
-}
+};
 
-enum status{
-    READY,
-    WAIT_START_ACK,
-    WAIT_SINGLE_ACK,
-    SYNC,
-    WRITING,
-    IDLE,
-    READING,
-    SYNC_ACK
-} conn_status;
+#define BL_PACKET_FSM_READY   0           /* Ready to send */
+#define BL_PACKET_FSM_WAIT_START_ACK    1
+#define BL_PACKET_FSM_WAIT_SINGLE_ACK   2
+#define BL_PACKET_FSM_SYNC              3
+#define BL_PACKET_FSM_WRITING           4
+#define BL_PACKET_FSM_IDLE              5 /* Ready to receive */
+#define BL_PACKET_FSM_READING   6
+#define BL_PACKET_FSM_SYNC_ACK  7
 
 /**
  *  Prototypes 
  **/
-void fsm_init(struct fsm *f);
-void fsm_open(struct fsm *f);
-void fsm_close(struct fsm *f);
-void fsm_input(struct fsm *f, u8 *input_packet, int l);
-void fsm_protoreject(struct fsm *);
-void fsm_sdata(fsm *f, u8 code, u8 id, const u8 *data, int len);
+struct pkt_cb* pcb_create(int conv);
+void pcb_release(struct pkt_cb *pcb);
+int pcb_recv(struct pkt_cb *pcb, char *buffer, int len);
+void pcb_send(struct pkt_cb *pcb);
+void pcb_update(struct pkt_cb *pcb);
+void pcb_input(struct pkt_cb *pcb, u8 *input_packet, int l);
+void pcb_log(struct pkt_cb *pcb, int mask, const char *fmt, ...);
+void set_mtu(struct pkt_cb *pcb, int mtu);
+void read_charac(uuid_t read_uuid,on_read);
+
+#ifdef __cplusplus
+}
+#endif
 #endif

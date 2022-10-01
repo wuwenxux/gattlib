@@ -4,7 +4,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_search_module(GATTLIB REQUIRED gattlib)
 pkg_search_module(GLIB REQUIRED glib-2.0)
-pkg_search_module(PCRE REQUIRED libpcre)
+#pkg_search_module(PCRE REQUIRED libpcre)
 
 include_directories(${CMAKE_SOURCE_DIR}/common ${GLIB_INCLUDE_DIRS})
 
